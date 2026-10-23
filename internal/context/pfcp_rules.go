@@ -251,6 +251,8 @@ type PDI struct {
 	UEIPAddress     *pfcptype.UEIPAddress
 	SDFFilter       *pfcptype.SDFFilter
 	ApplicationID   string
+	// FramedRoutes contains canonical IPv4 CIDRs behind the UE (not UE addresses).
+	FramedRoutes []string
 }
 
 // Forwarding Action Rule. 7.5.2.3-1

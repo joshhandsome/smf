@@ -259,6 +259,10 @@ func newPDIIE(pdi *context.PDI) (*ie.IE, error) {
 	if pdi.ApplicationID != "" {
 		children = append(children, ie.NewApplicationID(pdi.ApplicationID))
 	}
+	for _, prefix := range pdi.FramedRoutes {
+		// RFC 2865 section 5.22: use this session's UE as gateway, metric 1.
+		children = append(children, ie.NewFramedRoute(prefix+" 0.0.0.0 1"))
+	}
 	return ie.NewPDI(children...), nil
 }
 

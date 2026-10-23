@@ -2,6 +2,7 @@ package context
 
 import (
 	"fmt"
+	"net/netip"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -567,6 +568,10 @@ func (datapath *DataPath) addUrrToPath(smContext *SMContext) {
 func (dataPath *DataPath) ActivateTunnelAndPDR(
 	smContext *SMContext, precedence uint32, bindings ...PathQoSBinding,
 ) error {
+	framedRoutes, err := dataPath.ipv4FramedRoutes(smContext)
+	if err != nil {
+		return err
+	}
 	if len(bindings) == 0 {
 		return fmt.Errorf("missing path QoS binding")
 	}
@@ -675,6 +680,7 @@ func (dataPath *DataPath) ActivateTunnelAndPDR(
 				return err
 			} else {
 				ULPDR.PDI = PDI{
+					FramedRoutes:    framedRoutes,
 					SourceInterface: pfcptype.SourceInterface{InterfaceValue: pfcptype.SourceInterfaceAccess},
 					LocalFTeid: &pfcptype.FTEID{
 						V4:          true,
@@ -744,6 +750,7 @@ func (dataPath *DataPath) ActivateTunnelAndPDR(
 
 			if curDataPathNode.IsAnchorUPF() {
 				DLPDR.PDI = PDI{
+					FramedRoutes: framedRoutes,
 					SourceInterface: pfcptype.SourceInterface{
 						InterfaceValue: pfcptype.SourceInterfaceCore,
 					},
@@ -849,9 +856,48 @@ func (dataPath *DataPath) ActivateTunnelAndPDR(
 	return nil
 }
 
+// ipv4FramedRoutes validates the deliberately limited V1 subscription before
+// allocating any tunnel/PDR resources. DN routes and UPF marks are lab setup.
+func (dataPath *DataPath) ipv4FramedRoutes(smContext *SMContext) ([]string, error) {
+	dnn := smContext.DnnConfiguration
+	if len(dnn.Ipv6FrameRouteList) != 0 {
+		return nil, fmt.Errorf("framed route V1 supports IPv4 only")
+	}
+	if len(dnn.Ipv4FrameRouteList) == 0 {
+		return nil, nil
+	}
+	if len(dnn.Ipv4FrameRouteList) != 1 {
+		return nil, fmt.Errorf("framed route V1 requires exactly one IPv4 prefix")
+	}
+	if dataPath.FirstDPNode == nil || dataPath.FirstDPNode.Next() != nil {
+		return nil, fmt.Errorf("framed route V1 requires a single UPF")
+	}
+	if smContext.PDUAddress.To4() == nil {
+		return nil, fmt.Errorf("framed route V1 requires an IPv4 UE address")
+	}
+	route := dnn.Ipv4FrameRouteList[0]
+	prefix, err := netip.ParsePrefix(route.Ipv4Mask)
+	if err != nil || !prefix.Addr().Is4() || prefix.Bits() == 0 || route.Ipv6Prefix != "" {
+		return nil, fmt.Errorf("invalid IPv4 framed route %q", route.Ipv4Mask)
+	}
+	prefix = prefix.Masked()
+	if !prefix.Addr().IsGlobalUnicast() {
+		return nil, fmt.Errorf("framed route must be a unicast IPv4 prefix: %s", prefix)
+	}
+	ueAddr, _ := netip.AddrFromSlice(smContext.PDUAddress.To4())
+	if prefix.Contains(ueAddr) {
+		return nil, fmt.Errorf("framed route V1 must not contain the UE address: %s", prefix)
+	}
+	return []string{prefix.String()}, nil
+}
+
 func (dataPath *DataPath) ActivateDcTunnelAndPDR(
 	smContext *SMContext, precedence uint32, bindings ...PathQoSBinding,
 ) error {
+	if len(smContext.DnnConfiguration.Ipv4FrameRouteList) != 0 ||
+		len(smContext.DnnConfiguration.Ipv6FrameRouteList) != 0 {
+		return fmt.Errorf("framed route V1 does not support dual connectivity")
+	}
 	if len(bindings) == 0 {
 		return fmt.Errorf("missing path QoS binding")
 	}
